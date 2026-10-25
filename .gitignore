@@ -13,6 +13,7 @@ publish/
 dist/
 *.tmp
 *.log
+*.zip
 
 # OS generated
 Thumbs.db
