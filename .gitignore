@@ -1,0 +1,22 @@
+# Visual Studio / Rider / Antigravity
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build Results & Caches
+bin/
+obj/
+publish/
+dist/
+*.tmp
+*.log
+
+# OS generated
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
