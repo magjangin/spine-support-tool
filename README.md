@@ -5,7 +5,7 @@
 [![GitHub Release](https://img.shields.io/github/v/release/magjangin/spine-support-tool?color=purple)](https://github.com/magjangin/spine-support-tool/releases)
 [![Platform](https://img.shields.io/badge/Platform-Windows_x64-blue.svg)](https://github.com/magjangin/spine-support-tool)
 [![Target Framework](https://img.shields.io/badge/.NET-10.0-512bd4.svg)](https://dotnet.microsoft.com/)
-[![UI Framework](https://img.shields.io/badge/UI-Avalonia_11.2-purple.svg)](https://avaloniaui.net/)
+[![UI Framework](https://img.shields.io/badge/UI-Avalonia_12.1.3-purple.svg)](https://avaloniaui.net/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 ---
