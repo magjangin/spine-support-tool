@@ -1,9 +1,10 @@
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
@@ -17,13 +18,17 @@ namespace SpineSupportTool;
 
 public partial class MainWindow : Window
 {
+    private const int MaxLogLines = 1000;
+
     private readonly ConfigService _configService;
     private readonly SpineHwaService _spineHwaService;
     private readonly BundleExtractorService _bundleService;
     private readonly BmsSyncService _bmsService;
 
     private readonly ObservableCollection<BundleItem> _bundles = new();
-    private readonly StringBuilder _logBuffer = new();
+    private readonly ConcurrentQueue<string> _pendingLogs = new();
+    private readonly List<string> _logLines = new();
+    private readonly DispatcherTimer _logFlushTimer;
     private CancellationTokenSource? _currentCts;
 
     public MainWindow()
@@ -44,6 +49,14 @@ public partial class MainWindow : Window
         _bmsService.ProgressChanged += UpdateProgress;
 
         LstBundles.ItemsSource = _bundles;
+
+        // UI 렌더링 병목 방지를 위한 스로틀 로그 플러시 타이머 (100ms 간격 배치 플러시)
+        _logFlushTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(100)
+        };
+        _logFlushTimer.Tick += (_, _) => FlushLogs();
+        _logFlushTimer.Start();
 
         Loaded += (_, _) => InitializeApp();
     }
@@ -101,13 +114,32 @@ public partial class MainWindow : Window
 
     public void AppendLog(string message)
     {
-        Dispatcher.UIThread.Post(() =>
+        var line = $"[{DateTime.Now:HH:mm:ss}] {message}";
+        _pendingLogs.Enqueue(line);
+    }
+
+    private void FlushLogs()
+    {
+        if (_pendingLogs.IsEmpty) return;
+
+        bool changed = false;
+        while (_pendingLogs.TryDequeue(out var line))
         {
-            var line = $"[{DateTime.Now:HH:mm:ss}] {message}";
-            _logBuffer.AppendLine(line);
-            TxtLogConsole.Text = _logBuffer.ToString();
+            _logLines.Add(line);
+            changed = true;
+        }
+
+        if (changed)
+        {
+            if (_logLines.Count > MaxLogLines)
+            {
+                int removeCount = _logLines.Count - MaxLogLines;
+                _logLines.RemoveRange(0, removeCount);
+            }
+
+            TxtLogConsole.Text = string.Join(Environment.NewLine, _logLines);
             TxtLogConsole.CaretIndex = TxtLogConsole.Text.Length;
-        });
+        }
     }
 
     private void SetBusy(bool isBusy, string status)
@@ -116,11 +148,22 @@ public partial class MainWindow : Window
         {
             TxtStatusBar.Text = status;
             PnlProgress.IsVisible = isBusy;
+            BtnCancelTask.IsEnabled = isBusy;
+
+            // 실행 중 중복 클릭 방지 (버튼 비활성화)
+            BtnDownloadRelease.IsEnabled = !isBusy;
+            BtnBuildLocal.IsEnabled = !isBusy;
+            BtnStartExtractBundles.IsEnabled = !isBusy;
+            BtnStartBatchRender.IsEnabled = !isBusy;
+            BtnSyncBms.IsEnabled = !isBusy;
+
             if (!isBusy)
             {
                 TxtStatusDetail.Text = "";
                 PrgTask.Value = 0;
                 TxtProgressPercent.Text = "0.0%";
+                _currentCts?.Dispose();
+                _currentCts = null;
             }
         });
     }
@@ -146,6 +189,16 @@ public partial class MainWindow : Window
     private void OnOpenWorkDirClick(object? sender, RoutedEventArgs e)
     {
         OpenFolderInExplorer(_configService.Config.WorkOutputDir);
+    }
+
+    private void OnCancelTaskClick(object? sender, RoutedEventArgs e)
+    {
+        if (_currentCts != null && !_currentCts.IsCancellationRequested)
+        {
+            AppendLog("[시스템] 사용자가 작업 취소를 요청했습니다...");
+            _currentCts.Cancel();
+            BtnCancelTask.IsEnabled = false;
+        }
     }
 
     #endregion
@@ -212,6 +265,11 @@ public partial class MainWindow : Window
             RefreshSpineHwaStatus();
             SetBusy(false, success ? "설치 성공" : "설치 실패");
         }
+        catch (OperationCanceledException)
+        {
+            AppendLog("[spine-hwa] 릴리즈 다운로드가 취소되었습니다.");
+            SetBusy(false, "작업 취소됨");
+        }
         catch (Exception ex)
         {
             AppendLog($"설치 중 오류: {ex.Message}");
@@ -228,6 +286,11 @@ public partial class MainWindow : Window
             var success = await _spineHwaService.BuildLocalSourceAsync(_currentCts.Token);
             RefreshSpineHwaStatus();
             SetBusy(false, success ? "컴파일 및 배포 완료" : "컴파일 실패");
+        }
+        catch (OperationCanceledException)
+        {
+            AppendLog("[spine-hwa] 로컬 빌드가 사용자에 의해 취소되었습니다.");
+            SetBusy(false, "작업 취소됨");
         }
         catch (Exception ex)
         {
@@ -279,6 +342,11 @@ public partial class MainWindow : Window
             var targetDir = _configService.Config.ExtractedOutputDir;
             var ok = await _bundleService.ExtractBundlesAsync(selected, targetDir, _currentCts.Token);
             SetBusy(false, ok ? "번들 추출 완료" : "추출 완료 (오류 포함)");
+        }
+        catch (OperationCanceledException)
+        {
+            AppendLog("[번들추출] 작업이 사용자에 의해 취소되었습니다.");
+            SetBusy(false, "작업 취소됨");
         }
         catch (Exception ex)
         {
@@ -333,6 +401,11 @@ public partial class MainWindow : Window
             var ok = await _spineHwaService.RenderMonstersAsync(inDir, outDir, scale, skin, _currentCts.Token);
             SetBusy(false, ok ? "렌더링 완료" : "렌더링 완료 (확인 필요)");
         }
+        catch (OperationCanceledException)
+        {
+            AppendLog("[sv-cli] 렌더링 작업이 사용자에 의해 취소되었습니다.");
+            SetBusy(false, "작업 취소됨");
+        }
         catch (Exception ex)
         {
             AppendLog($"렌더링 예외: {ex.Message}");
@@ -379,6 +452,11 @@ public partial class MainWindow : Window
             int count = await _bmsService.SyncRenderedMonstersToBmsAsync(src, dst, _currentCts.Token);
             SetBusy(false, $"BMS 동기화 완료 ({count}개)");
         }
+        catch (OperationCanceledException)
+        {
+            AppendLog("[BMS동기화] 작업이 사용자에 의해 취소되었습니다.");
+            SetBusy(false, "작업 취소됨");
+        }
         catch (Exception ex)
         {
             AppendLog($"동기화 예외: {ex.Message}");
@@ -395,6 +473,63 @@ public partial class MainWindow : Window
 
     #region Event Handlers - Settings Tab
 
+    private async void OnBrowseMuseDashPathClick(object? sender, RoutedEventArgs e)
+    {
+        var path = await PickFolderAsync("뮤즈대쉬(Muse Dash) 설치 폴더 선택");
+        if (!string.IsNullOrEmpty(path))
+        {
+            CfgMuseDashPath.Text = path;
+        }
+    }
+
+    private async void OnBrowseAssetStudioCliClick(object? sender, RoutedEventArgs e)
+    {
+        var file = await PickFileAsync("AssetStudioModCLI.exe 선택", "실행 파일 (*.exe)");
+        if (!string.IsNullOrEmpty(file))
+        {
+            CfgAssetStudioCli.Text = file;
+        }
+    }
+
+    private async void OnBrowseSpineHwaPathClick(object? sender, RoutedEventArgs e)
+    {
+        var path = await PickFolderAsync("spine-hwa 프로젝트/설치 폴더 선택");
+        if (!string.IsNullOrEmpty(path))
+        {
+            CfgSpineHwaPath.Text = path;
+        }
+    }
+
+    private async void OnBrowseWorkOutputDirClick(object? sender, RoutedEventArgs e)
+    {
+        var path = await PickFolderAsync("작업 기본 출력 폴더 선택");
+        if (!string.IsNullOrEmpty(path))
+        {
+            CfgWorkOutputDir.Text = path;
+            UpdateConfigDerivedPaths(path);
+        }
+    }
+
+    private async void OnBrowseBmsNoteSkinDirClick(object? sender, RoutedEventArgs e)
+    {
+        var path = await PickFolderAsync("BMS 에디터 노트 스킨 폴더 선택");
+        if (!string.IsNullOrEmpty(path))
+        {
+            CfgBmsNoteSkinDir.Text = path;
+            TxtBmsTargetDir.Text = path;
+        }
+    }
+
+    private void UpdateConfigDerivedPaths(string workDir)
+    {
+        var ext = Path.Combine(workDir, "gamescene_추출");
+        var render = Path.Combine(workDir, "몬스터_렌더_sv");
+        TxtBundleTargetDir.Text = ext;
+        TxtRenderInputDir.Text = ext;
+        TxtRenderOutputDir.Text = render;
+        TxtBmsSourceDir.Text = render;
+    }
+
     private void OnSaveConfigClick(object? sender, RoutedEventArgs e)
     {
         var cfg = _configService.Config;
@@ -407,6 +542,7 @@ public partial class MainWindow : Window
         _configService.Save();
         RefreshSpineHwaStatus();
         RefreshBundles();
+        UpdateConfigDerivedPaths(cfg.WorkOutputDir);
         AppendLog("[설정] 환경 설정이 성공적으로 저장되었습니다.");
     }
 
@@ -418,6 +554,7 @@ public partial class MainWindow : Window
         CfgSpineHwaPath.Text = cfg.SpineHwaPath;
         CfgWorkOutputDir.Text = cfg.WorkOutputDir;
         CfgBmsNoteSkinDir.Text = cfg.BmsNoteSkinDir;
+        UpdateConfigDerivedPaths(cfg.WorkOutputDir);
         AppendLog("[설정] 기본값으로 복원했습니다 (저장 버튼을 눌러 적용).");
     }
 
@@ -425,7 +562,8 @@ public partial class MainWindow : Window
 
     private void OnClearLogClick(object? sender, RoutedEventArgs e)
     {
-        _logBuffer.Clear();
+        while (_pendingLogs.TryDequeue(out _)) { }
+        _logLines.Clear();
         TxtLogConsole.Text = "";
     }
 
@@ -447,6 +585,32 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             AppendLog($"폴더 선택 오류: {ex.Message}");
+        }
+        return null;
+    }
+
+    private async Task<string?> PickFileAsync(string title, string filterName)
+    {
+        try
+        {
+            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = title,
+                AllowMultiple = false,
+                FileTypeFilter = new[]
+                {
+                    new FilePickerFileType(filterName) { Patterns = new[] { "*.exe" } }
+                }
+            });
+
+            if (files.Count > 0)
+            {
+                return files[0].Path.LocalPath;
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"파일 선택 오류: {ex.Message}");
         }
         return null;
     }

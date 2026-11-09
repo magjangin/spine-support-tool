@@ -9,6 +9,8 @@ namespace SpineSupportTool.Services;
 
 public class BmsSyncService
 {
+    private static readonly Regex MonsterNameRegex = new(@"^([0-9]{2})([0-9]{2})(_[a-zA-Z0-9_]+)?\.png$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private readonly ConfigService _configService;
 
     public event Action<string>? LogReceived;
@@ -54,7 +56,7 @@ public class BmsSyncService
                 var file = pngFiles[i];
                 var fileName = Path.GetFileName(file);
 
-                var match = Regex.Match(fileName, @"^([0-9]{2})([0-9]{2})(_[a-zA-Z0-9_]+)?\.png$", RegexOptions.IgnoreCase);
+                var match = MonsterNameRegex.Match(fileName);
                 if (match.Success)
                 {
                     var sceneNum = match.Groups[1].Value;

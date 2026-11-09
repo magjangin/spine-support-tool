@@ -49,12 +49,21 @@ public class BundleItem : INotifyPropertyChanged
         };
     }
 
+    private static readonly Regex SceneNumRegex = new(@"gamescene_([0-9]{2})(_cy|_fool)?", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex GeneralSceneRegex = new(@"gamescene_([a-zA-Z0-9_]+?)_assets", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+    protected void OnPropertyChanged([CallerMemberName] string? propertyName = null)
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
+
     private static string ExtractSceneTag(string fileName)
     {
         // gamescene_01_assets_all_82f3... -> 장면01
         // gamescene_01_cy_... -> 장면01_cy
         // gamescene_dave_... -> dave
-        var match = Regex.Match(fileName, @"gamescene_([0-9]{2})(_cy|_fool)?", RegexOptions.IgnoreCase);
+        var match = SceneNumRegex.Match(fileName);
         if (match.Success)
         {
             var num = match.Groups[1].Value;
@@ -62,18 +71,12 @@ public class BundleItem : INotifyPropertyChanged
             return $"장면{num}{sub}";
         }
 
-        var generalMatch = Regex.Match(fileName, @"gamescene_([a-zA-Z0-9_]+?)_assets", RegexOptions.IgnoreCase);
+        var generalMatch = GeneralSceneRegex.Match(fileName);
         if (generalMatch.Success)
         {
             return generalMatch.Groups[1].Value;
         }
 
         return "gamescene";
-    }
-
-    public event PropertyChangedEventHandler? PropertyChanged;
-    protected void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-    {
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
 }

@@ -96,6 +96,11 @@ public class SpineHwaService
             using var proc = Process.Start(psi);
             if (proc == null) return false;
 
+            using var reg = ct.Register(() =>
+            {
+                try { proc.Kill(entireProcessTree: true); } catch { }
+            });
+
             double fakeProgress = 10.0;
             proc.OutputDataReceived += (_, e) =>
             {
@@ -292,6 +297,11 @@ public class SpineHwaService
         {
             using var proc = Process.Start(psi);
             if (proc == null) return false;
+
+            using var reg = ct.Register(() =>
+            {
+                try { proc.Kill(entireProcessTree: true); } catch { }
+            });
 
             proc.OutputDataReceived += (_, e) =>
             {

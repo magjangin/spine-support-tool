@@ -41,6 +41,12 @@
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Padding" Value="14,7"/>
         </Style>
+        <Style Selector="Button.danger">
+            <Setter Property="Background" Value="#E03131"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="12,6"/>
+        </Style>
         <Style Selector="TabItem">
             <Setter Property="FontSize" Value="14"/>
             <Setter Property="Padding" Value="16,10"/>
@@ -101,7 +107,7 @@
                                 <Grid ColumnDefinitions="Auto, *, Auto" Margin="0,4">
                                     <TextBlock Text="GitHub 저장소 URL:" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                     <TextBox Grid.Column="1" Name="TxtGithubUrl" Text="https://github.com/magjangin/spine-hwa"/>
-                                    <Button Grid.Column="2" Classes="primary" Content="릴리즈 ZIP 다운로드 &amp; 설치" Margin="10,0,0,0" Click="OnDownloadReleaseClick"/>
+                                    <Button Grid.Column="2" Name="BtnDownloadRelease" Classes="primary" Content="릴리즈 ZIP 다운로드 &amp; 설치" Margin="10,0,0,0" Click="OnDownloadReleaseClick"/>
                                 </Grid>
 
                                 <Separator Margin="0,6"/>
@@ -111,7 +117,7 @@
                                         <TextBlock Text="로컬 소스 원클릭 릴리즈 컴파일 (dist.ps1)" FontWeight="SemiBold"/>
                                         <TextBlock Text="Rust와 MSVC 빌드 도구를 사용하여 bin/ 폴더로 SpineViewer와 sv-cli를 즉시 컴파일 배포합니다." Classes="sub"/>
                                     </StackPanel>
-                                    <Button Grid.Column="1" Classes="success" Content="🔨 로컬 빌드 시작 (dist.ps1)" VerticalAlignment="Center" Click="OnBuildLocalClick"/>
+                                    <Button Grid.Column="1" Name="BtnBuildLocal" Classes="success" Content="🔨 로컬 빌드 시작 (dist.ps1)" VerticalAlignment="Center" Click="OnBuildLocalClick"/>
                                 </Grid>
                             </StackPanel>
                         </Border>
@@ -163,7 +169,7 @@
                         </StackPanel>
                         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
                             <Button Content="📁 추출 폴더 열기" Click="OnOpenExtractedDirClick"/>
-                            <Button Classes="primary" Content="🚀 선택한 번들 일괄 추출 시작" Click="OnStartExtractBundlesClick"/>
+                            <Button Name="BtnStartExtractBundles" Classes="primary" Content="🚀 선택한 번들 일괄 추출 시작" Click="OnStartExtractBundlesClick"/>
                         </StackPanel>
                     </Grid>
                 </Grid>
@@ -206,7 +212,7 @@
                                 </Grid>
 
                                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
-                                    <Button Classes="primary" Content="⚡ 몬스터/노트 일괄 렌더링 시작" Click="OnStartBatchRenderClick"/>
+                                    <Button Name="BtnStartBatchRender" Classes="primary" Content="⚡ 몬스터/노트 일괄 렌더링 시작" Click="OnStartBatchRenderClick"/>
                                     <Button Content="📁 렌더링 결과 폴더 열기" Click="OnOpenRenderOutputDirClick"/>
                                 </StackPanel>
                             </StackPanel>
@@ -239,7 +245,7 @@
                                 </Grid>
 
                                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
-                                    <Button Classes="success" Content="📂 BMS 에디터 규격으로 자동 동기화" Click="OnSyncBmsClick"/>
+                                    <Button Name="BtnSyncBms" Classes="success" Content="📂 BMS 에디터 규격으로 자동 동기화" Click="OnSyncBmsClick"/>
                                     <Button Content="📁 BMS 스킨 폴더 열기" Click="OnOpenBmsDirClick"/>
                                 </StackPanel>
                             </StackPanel>
@@ -256,21 +262,26 @@
                             <StackPanel Spacing="10">
                                 <TextBlock Text="도구 및 작업 경로 설정" Classes="header"/>
 
-                                <Grid ColumnDefinitions="160, *" RowDefinitions="Auto, Auto, Auto, Auto, Auto" Margin="0,4">
+                                <Grid ColumnDefinitions="160, *, Auto" RowDefinitions="Auto, Auto, Auto, Auto, Auto" Margin="0,4">
                                     <TextBlock Grid.Row="0" Grid.Column="0" Text="뮤즈대쉬 설치 경로:" VerticalAlignment="Center"/>
                                     <TextBox Grid.Row="0" Grid.Column="1" Name="CfgMuseDashPath" Margin="0,3"/>
+                                    <Button Grid.Row="0" Grid.Column="2" Content="찾기..." Margin="6,0,0,0" Click="OnBrowseMuseDashPathClick"/>
 
                                     <TextBlock Grid.Row="1" Grid.Column="0" Text="AssetStudio CLI 경로:" VerticalAlignment="Center"/>
                                     <TextBox Grid.Row="1" Grid.Column="1" Name="CfgAssetStudioCli" Margin="0,3"/>
+                                    <Button Grid.Row="1" Grid.Column="2" Content="찾기..." Margin="6,0,0,0" Click="OnBrowseAssetStudioCliClick"/>
 
                                     <TextBlock Grid.Row="2" Grid.Column="0" Text="spine-hwa 프로젝트 경로:" VerticalAlignment="Center"/>
                                     <TextBox Grid.Row="2" Grid.Column="1" Name="CfgSpineHwaPath" Margin="0,3"/>
+                                    <Button Grid.Row="2" Grid.Column="2" Content="찾기..." Margin="6,0,0,0" Click="OnBrowseSpineHwaPathClick"/>
 
                                     <TextBlock Grid.Row="3" Grid.Column="0" Text="작업 기본 출력 폴더:" VerticalAlignment="Center"/>
                                     <TextBox Grid.Row="3" Grid.Column="1" Name="CfgWorkOutputDir" Margin="0,3"/>
+                                    <Button Grid.Row="3" Grid.Column="2" Content="찾기..." Margin="6,0,0,0" Click="OnBrowseWorkOutputDirClick"/>
 
                                     <TextBlock Grid.Row="4" Grid.Column="0" Text="BMS 에디터 노트 스킨:" VerticalAlignment="Center"/>
                                     <TextBox Grid.Row="4" Grid.Column="1" Name="CfgBmsNoteSkinDir" Margin="0,3"/>
+                                    <Button Grid.Row="4" Grid.Column="2" Content="찾기..." Margin="6,0,0,0" Click="OnBrowseBmsNoteSkinDirClick"/>
                                 </Grid>
 
                                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
@@ -293,8 +304,9 @@
                 </StackPanel>
                 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center" Name="PnlProgress" IsVisible="False">
-                    <ProgressBar Name="PrgTask" Minimum="0" Maximum="100" Value="0" Width="220" Height="16" VerticalAlignment="Center" CornerRadius="4"/>
-                    <TextBlock Name="TxtProgressPercent" Text="0.0%" FontWeight="Bold" Width="55" TextAlignment="Right" VerticalAlignment="Center" Foreground="#4C6EF5"/>
+                    <ProgressBar Name="PrgTask" Minimum="0" Maximum="100" Value="0" Width="200" Height="16" VerticalAlignment="Center" CornerRadius="4"/>
+                    <TextBlock Name="TxtProgressPercent" Text="0.0%" FontWeight="Bold" Width="50" TextAlignment="Right" VerticalAlignment="Center" Foreground="#4C6EF5"/>
+                    <Button Name="BtnCancelTask" Classes="danger" Content="🛑 작업 취소" Click="OnCancelTaskClick" Margin="6,0,0,0"/>
                 </StackPanel>
             </Grid>
         </Border>

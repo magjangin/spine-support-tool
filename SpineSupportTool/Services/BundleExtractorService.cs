@@ -101,6 +101,11 @@ public class BundleExtractorService
                 using var proc = Process.Start(psi);
                 if (proc == null) continue;
 
+                using var reg = ct.Register(() =>
+                {
+                    try { proc.Kill(entireProcessTree: true); } catch { }
+                });
+
                 var stdOutTask = proc.StandardOutput.ReadToEndAsync(ct);
                 var stdErrTask = proc.StandardError.ReadToEndAsync(ct);
 
@@ -151,10 +156,20 @@ public class BundleExtractorService
                 {
                     var fi = new FileInfo(file);
                     var dest = Path.Combine(dir, fi.Name);
-                    if (!File.Exists(dest))
+                    File.Move(file, dest, overwrite: true);
+                }
+
+                // 파일 이동 완료 후 빈 하위 디렉터리 정리
+                try
+                {
+                    if (Directory.Exists(sub) && Directory.GetFileSystemEntries(sub).Length == 0)
                     {
-                        File.Move(file, dest);
+                        Directory.Delete(sub, recursive: true);
                     }
+                }
+                catch
+                {
+                    // 정리 실패 시 무시
                 }
             }
         }
