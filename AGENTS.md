@@ -105,5 +105,11 @@ dotnet publish SpineSupportTool\SpineSupportTool.csproj -c Release -o publish
 - 서비스(`Models/`, `Services/`)는 Avalonia 의존성이 없으므로, 콘솔 하네스 프로젝트에서 `<Compile Include="...\Services\*.cs" />`로 링크해 실제 번들로 추출→렌더→BMS 동기화를 돌리고 이전 버전 출력과 `diff -rq`로 비교한다.
 - 실측 환경: 게임 `H:\muse dash hwa`, AssetStudioModCLI v0.19.0, `H:\source\repos\spine hwa\bin\sv-cli.exe`.
 
+### 릴리즈 패키징 (v1.1.0~)
+- ZIP에는 `publish\SpineSupportTool.exe` **하나만** 넣는다: `SpineSupportTool-v<버전>-win-x64.zip` (약 56MB).
+  - v1.0.0은 네이티브 `.pdb`(약 100MB)와 경로가 모두 빈 `appsettings.json`까지 포함했었음. 설정 파일이 없으면 첫 실행 시 문서 폴더 기준 기본 경로로 생성되므로 넣지 않는다.
+- 버전은 `SpineSupportTool.csproj`의 `<Version>`과 `MainWindow.axaml` 헤더 문구를 함께 올린다.
+- `gh release create v<버전> <zip> --target main --notes-file <노트>`로 배포. 배포 전 ZIP을 임시 폴더에 풀어 실행·창 표시를 확인한다.
+
 ### 산출물 위치
 - 단일 독립 실행 파일: `h:\source\repos\spine support tool\publish\SpineSupportTool.exe` (Self-Contained)
