@@ -27,8 +27,18 @@ public static class ProcessRunner
         Action<string>? onStdErrLine = null,
         TimeSpan? timeout = null,
         Encoding? outputEncoding = null,
+        bool hiddenDesktop = false,
         CancellationToken ct = default)
     {
+        // GUI 창을 띄우는 도구(sv-cli)는 숨김 데스크톱에서 실행해 화면 깜빡임/포커스 탈취를 막는다.
+        // 줄 단위 콜백·타임아웃이 필요 없는 경우에만 사용하며, 데스크톱을 만들 수 없으면 일반 실행으로 대체한다.
+        if (hiddenDesktop && onStdOutLine == null && onStdErrLine == null && timeout == null
+            && HiddenDesktop.DesktopName is { } desktop)
+        {
+            return await HiddenDesktop.RunAsync(desktop, fileName, arguments, workingDirectory,
+                outputEncoding ?? Encoding.Default, ct).ConfigureAwait(false);
+        }
+
         var psi = new ProcessStartInfo(fileName)
         {
             RedirectStandardOutput = true,
