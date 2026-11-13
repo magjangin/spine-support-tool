@@ -7,34 +7,42 @@ namespace SpineSupportTool.Services;
 
 public class ConfigService
 {
-    private static readonly string ConfigPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "appsettings.json");
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+
+    private readonly string _configPath;
 
     public AppConfig Config { get; private set; }
 
-    public ConfigService()
+    /// <summary>마지막 로드/저장 중 발생한 문제(없으면 null). UI 로그에 표시한다.</summary>
+    public string? LastError { get; private set; }
+
+    public ConfigService(string? configPath = null)
     {
+        _configPath = configPath ?? Path.Combine(AppContext.BaseDirectory, "appsettings.json");
         Config = Load();
     }
 
     public AppConfig Load()
     {
-        try
+        LastError = null;
+        if (File.Exists(_configPath))
         {
-            if (File.Exists(ConfigPath))
+            try
             {
-                var json = File.ReadAllText(ConfigPath);
-                var loaded = JsonSerializer.Deserialize<AppConfig>(json, JsonOptions);
+                var loaded = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(_configPath), JsonOptions);
                 if (loaded != null)
                 {
                     Config = loaded;
                     return loaded;
                 }
             }
-        }
-        catch
-        {
-            // fallback to default
+            catch (Exception ex)
+            {
+                // 손상된 설정을 조용히 덮어쓰지 않도록 백업해 둔다.
+                var backup = _configPath + ".bak";
+                try { File.Copy(_configPath, backup, overwrite: true); } catch { /* 백업 실패는 무시 */ }
+                LastError = $"설정 파일을 읽지 못해 기본값으로 시작합니다 (백업: {backup}): {ex.Message}";
+            }
         }
 
         Config = new AppConfig();
@@ -42,16 +50,20 @@ public class ConfigService
         return Config;
     }
 
-    public void Save()
+    public bool Save()
     {
         try
         {
-            var json = JsonSerializer.Serialize(Config, JsonOptions);
-            File.WriteAllText(ConfigPath, json);
+            // 임시 파일에 쓴 뒤 교체해 저장 도중 종료돼도 설정 파일이 잘리지 않게 한다.
+            var tmp = _configPath + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(Config, JsonOptions));
+            File.Move(tmp, _configPath, overwrite: true);
+            return true;
         }
-        catch
+        catch (Exception ex)
         {
-            // ignore save failure
+            LastError = $"설정 저장 실패 ({_configPath}): {ex.Message}";
+            return false;
         }
     }
 }

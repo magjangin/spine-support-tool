@@ -1,47 +1,47 @@
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using SpineSupportTool.Models;
 
 namespace SpineSupportTool.Services;
 
-public class SpineHwaService
+public class SpineHwaService : ServiceBase
 {
+    /// <summary>sv-cli가 스켈레톤으로 인식하는 확장자 (spine-hwa headless.rs collect_inputs와 동일).</summary>
+    private static readonly string[] SkeletonExtensions = { ".skel", ".json" };
+
+    private static readonly HttpClient HttpClient = CreateHttpClient();
+
     private readonly ConfigService _configService;
-    private static readonly HttpClient HttpClient = new() { Timeout = TimeSpan.FromMinutes(5) };
 
-    public event Action<string>? LogReceived;
-    public event Action<int, int, double>? ProgressChanged; // (current, total, percentage)
-
-    public SpineHwaService(ConfigService configService)
+    public SpineHwaService(ConfigService configService) : base("spine-hwa")
     {
         _configService = configService;
     }
 
-    private void Log(string message) => LogReceived?.Invoke($"[spine-hwa] {message}");
-
-    public bool IsViewerInstalled()
+    private static HttpClient CreateHttpClient()
     {
-        return File.Exists(_configService.Config.SpineViewerExe);
+        var client = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("SpineSupportTool");
+        return client;
     }
 
-    public bool IsCliInstalled()
-    {
-        return File.Exists(_configService.Config.SvCliExe);
-    }
+    public bool IsViewerInstalled() => File.Exists(_configService.Config.SpineViewerExe);
 
-    public bool HasLocalSource()
-    {
-        var cargoToml = Path.Combine(_configService.Config.SpineHwaPath, "Cargo.toml");
-        return File.Exists(cargoToml);
-    }
+    public bool IsCliInstalled() => File.Exists(_configService.Config.SvCliExe);
+
+    public bool HasLocalSource() =>
+        !string.IsNullOrWhiteSpace(_configService.Config.SpineHwaPath)
+        && File.Exists(Path.Combine(_configService.Config.SpineHwaPath, "Cargo.toml"));
 
     public void LaunchViewer(string? targetFile = null)
     {
@@ -58,13 +58,34 @@ public class SpineHwaService
             WorkingDirectory = Path.GetDirectoryName(exe)
         };
 
-        if (!string.IsNullOrWhiteSpace(targetFile) && File.Exists(targetFile))
+        bool hasTarget = !string.IsNullOrWhiteSpace(targetFile) && File.Exists(targetFile);
+        if (hasTarget) psi.ArgumentList.Add(targetFile!);
+
+        try
         {
-            psi.ArgumentList.Add(targetFile);
+            using var _ = Process.Start(psi);
+            Log($"SpineViewer.exe 실행됨 (대상: {(hasTarget ? targetFile : "대시보드")})");
+        }
+        catch (Exception ex)
+        {
+            Log($"SpineViewer.exe 실행 실패: {ex.Message}");
+        }
+    }
+
+    /// <summary>sv-cli 동작 확인용 도움말 출력. 응답이 없으면 10초 후 종료한다.</summary>
+    public async Task<string?> GetCliHelpAsync(CancellationToken ct = default)
+    {
+        var cli = _configService.Config.SvCliExe;
+        if (!File.Exists(cli))
+        {
+            Log($"오류: sv-cli.exe를 찾을 수 없습니다: {cli}");
+            return null;
         }
 
-        Process.Start(psi);
-        Log($"SpineViewer.exe 실행됨 (대상: {targetFile ?? "대시보드"})");
+        var result = await ProcessRunner.RunAsync(cli, new[] { "--help" }, Path.GetDirectoryName(cli),
+            timeout: TimeSpan.FromSeconds(10), outputEncoding: Encoding.UTF8, ct: ct).ConfigureAwait(false);
+        // sv-cli는 사용법을 stderr로, 오류 JSON을 stdout으로 출력한다.
+        return string.Join(Environment.NewLine, new[] { result.StdErr.Trim(), result.StdOut.Trim() }.Where(s => s.Length > 0));
     }
 
     public async Task<bool> BuildLocalSourceAsync(CancellationToken ct = default)
@@ -79,56 +100,39 @@ public class SpineHwaService
         }
 
         Log("로컬 Rust 릴리즈 빌드 & 배포 시작 (dist.ps1)...");
-        ProgressChanged?.Invoke(0, 100, 0.0);
+        ReportProgress(0, 100, 0.0);
 
-        var psi = new ProcessStartInfo("powershell.exe")
+        // 빌드 단계 수를 알 수 없으므로 출력 줄마다 90%까지 점근적으로 증가시킨다.
+        double fakeProgress = 0.0;
+        void OnLine(string line)
         {
-            Arguments = "-ExecutionPolicy Bypass -File .\\dist.ps1",
-            WorkingDirectory = root,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
+            Log(line);
+            fakeProgress += (90.0 - fakeProgress) * 0.05;
+            ReportProgress((int)fakeProgress, 100, fakeProgress);
+        }
 
         try
         {
-            using var proc = Process.Start(psi);
-            if (proc == null) return false;
+            var result = await ProcessRunner.RunAsync("powershell.exe",
+                new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", distScript },
+                workingDirectory: root,
+                onStdOutLine: OnLine,
+                onStdErrLine: line => Log($"[STDERR] {line}"),
+                ct: ct).ConfigureAwait(false);
 
-            using var reg = ct.Register(() =>
+            if (result.Success)
             {
-                try { proc.Kill(entireProcessTree: true); } catch { }
-            });
-
-            double fakeProgress = 10.0;
-            proc.OutputDataReceived += (_, e) =>
-            {
-                if (e.Data != null)
-                {
-                    Log(e.Data);
-                    if (fakeProgress < 90.0) fakeProgress += 3.0;
-                    ProgressChanged?.Invoke((int)fakeProgress, 100, fakeProgress);
-                }
-            };
-            proc.ErrorDataReceived += (_, e) => { if (e.Data != null) Log($"[STDERR] {e.Data}"); };
-
-            proc.BeginOutputReadLine();
-            proc.BeginErrorReadLine();
-
-            await proc.WaitForExitAsync(ct);
-
-            if (proc.ExitCode == 0)
-            {
-                ProgressChanged?.Invoke(100, 100, 100.0);
+                ReportProgress(100, 100, 100.0);
                 Log("빌드 완료! bin/ 폴더에 최신 바이너리가 배포되었습니다.");
                 return true;
             }
-            else
-            {
-                Log($"빌드 실패: 프로세스가 코드 {proc.ExitCode}로 종료되었습니다.");
-                return false;
-            }
+
+            Log($"빌드 실패: 프로세스가 코드 {result.ExitCode}로 종료되었습니다.");
+            return false;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -139,110 +143,148 @@ public class SpineHwaService
 
     public async Task<bool> DownloadFromGitHubReleaseAsync(string repoUrl, string installPath, CancellationToken ct = default)
     {
+        if (string.IsNullOrWhiteSpace(installPath))
+        {
+            Log("오류: spine-hwa 설치 경로가 비어 있습니다. 환경 설정에서 지정하세요.");
+            return false;
+        }
+
+        if (!TryParseGitHubRepo(repoUrl, out var owner, out var repo))
+        {
+            Log("오류: 올바른 GitHub 저장소 URL 형식이 아닙니다. (예: https://github.com/owner/repo)");
+            return false;
+        }
+
+        var tempZip = Path.Combine(Path.GetTempPath(), $"spine-hwa-{Guid.NewGuid():N}.zip");
         try
         {
-            Log($"GitHub 리포지토리 최신 릴리즈 확인 중: {repoUrl}...");
-            ProgressChanged?.Invoke(0, 100, 0.0);
-
-            var parts = repoUrl.TrimEnd('/').Split('/');
-            if (parts.Length < 2)
-            {
-                Log("오류: 올바른 GitHub 저장소 URL 형식이 아닙니다.");
-                return false;
-            }
-
-            var owner = parts[^2];
-            var repo = parts[^1];
             var apiUrl = $"https://api.github.com/repos/{owner}/{repo}/releases/latest";
+            Log($"GitHub 리포지토리 최신 릴리즈 확인 중: {owner}/{repo}...");
+            ReportProgress(0, 100, 0.0);
 
-            var request = new HttpRequestMessage(HttpMethod.Get, apiUrl);
-            request.Headers.Add("User-Agent", "SpineSupportTool");
-
-            var response = await HttpClient.SendAsync(request, ct);
-            if (!response.IsSuccessStatusCode)
+            var (zipUrl, totalBytes) = await FindReleaseZipAsync(apiUrl, ct).ConfigureAwait(false);
+            if (zipUrl == null)
             {
-                Log($"GitHub API 응답 오류: {response.StatusCode} ({apiUrl})");
-                return false;
-            }
-
-            var json = await response.Content.ReadAsStringAsync(ct);
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
-            string? zipUrl = null;
-            long totalBytes = 0;
-            if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var asset in assets.EnumerateArray())
-                {
-                    var name = asset.GetProperty("name").GetString() ?? "";
-                    if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
-                    {
-                        zipUrl = asset.GetProperty("browser_download_url").GetString();
-                        if (asset.TryGetProperty("size", out var sizeProp))
-                        {
-                            totalBytes = sizeProp.GetInt64();
-                        }
-                        break;
-                    }
-                }
-            }
-
-            if (string.IsNullOrEmpty(zipUrl))
-            {
-                Log("오류: 릴리즈에서 다운로드할 .zip 에셋을 찾을 수 없습니다.");
                 return false;
             }
 
             Log($"다운로드 시작: {zipUrl} (크기: {totalBytes / (1024.0 * 1024.0):F2} MB)");
-            Directory.CreateDirectory(installPath);
-            var tempZip = Path.Combine(Path.GetTempPath(), $"spine-hwa-{Guid.NewGuid():N}.zip");
-
-            using (var downloadResponse = await HttpClient.GetAsync(zipUrl, HttpCompletionOption.ResponseHeadersRead, ct))
-            {
-                downloadResponse.EnsureSuccessStatusCode();
-                if (totalBytes <= 0 && downloadResponse.Content.Headers.ContentLength.HasValue)
-                {
-                    totalBytes = downloadResponse.Content.Headers.ContentLength.Value;
-                }
-
-                using var downloadStream = await downloadResponse.Content.ReadAsStreamAsync(ct);
-                using var fileStream = new FileStream(tempZip, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true);
-
-                var buffer = new byte[81920];
-                long totalRead = 0;
-                int read;
-
-                while ((read = await downloadStream.ReadAsync(buffer, 0, buffer.Length, ct)) > 0)
-                {
-                    await fileStream.WriteAsync(buffer.AsMemory(0, read), ct);
-                    totalRead += read;
-
-                    if (totalBytes > 0)
-                    {
-                        double pct = (double)totalRead / totalBytes * 100.0;
-                        ProgressChanged?.Invoke((int)(totalRead / 1024), (int)(totalBytes / 1024), pct);
-                    }
-                }
-            }
+            await DownloadFileAsync(zipUrl, tempZip, totalBytes, ct).ConfigureAwait(false);
 
             Log("압축 해제 및 설치 중...");
-            ProgressChanged?.Invoke(95, 100, 95.0);
-            ZipFile.ExtractToDirectory(tempZip, installPath, overwriteFiles: true);
+            ReportProgress(95, 100, 95.0);
+            Directory.CreateDirectory(installPath);
+            // 압축 해제는 동기 API이므로 스레드 풀에서 실행해 UI 스레드를 막지 않는다.
+            await Task.Run(() => ZipFile.ExtractToDirectory(tempZip, installPath, overwriteFiles: true), ct).ConfigureAwait(false);
 
-            try { File.Delete(tempZip); } catch { }
-
-            ProgressChanged?.Invoke(100, 100, 100.0);
+            ReportProgress(100, 100, 100.0);
             Log($"설치 완료! 위치: {installPath}");
             return true;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
             Log($"GitHub 다운로드/설치 실패: {ex.Message}");
             return false;
         }
+        finally
+        {
+            try { File.Delete(tempZip); } catch { /* 임시 파일 정리 실패 무시 */ }
+        }
     }
 
+    private async Task<(string? Url, long Size)> FindReleaseZipAsync(string apiUrl, CancellationToken ct)
+    {
+        using var response = await HttpClient.GetAsync(apiUrl, ct).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            Log($"GitHub API 응답 오류: {(int)response.StatusCode} {response.StatusCode} ({apiUrl})");
+            return (null, 0);
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct).ConfigureAwait(false);
+
+        if (doc.RootElement.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var asset in assets.EnumerateArray())
+            {
+                var name = asset.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                if (!name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) continue;
+
+                var url = asset.TryGetProperty("browser_download_url", out var u) ? u.GetString() : null;
+                long size = asset.TryGetProperty("size", out var s) && s.TryGetInt64(out var v) ? v : 0;
+                if (!string.IsNullOrEmpty(url)) return (url, size);
+            }
+        }
+
+        Log("오류: 릴리즈에서 다운로드할 .zip 에셋을 찾을 수 없습니다.");
+        return (null, 0);
+    }
+
+    private async Task DownloadFileAsync(string url, string destPath, long totalBytes, CancellationToken ct)
+    {
+        using var response = await HttpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        if (totalBytes <= 0) totalBytes = response.Content.Headers.ContentLength ?? 0;
+
+        await using var source = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        await using var target = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true);
+
+        var buffer = new byte[81920];
+        long totalRead = 0;
+        int lastReportedPct = -1;
+        int read;
+        while ((read = await source.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+        {
+            await target.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+            totalRead += read;
+
+            if (totalBytes <= 0) continue;
+            // 80KB 청크마다 이벤트를 쏘지 않고 1% 단위로만 보고한다 (0~94%: 이후는 압축 해제 단계).
+            int pct = (int)(totalRead * 94 / totalBytes);
+            if (pct != lastReportedPct)
+            {
+                lastReportedPct = pct;
+                ReportProgress((int)(totalRead / 1024), (int)(totalBytes / 1024), pct);
+            }
+        }
+    }
+
+    internal static bool TryParseGitHubRepo(string? repoUrl, out string owner, out string repo)
+    {
+        owner = repo = string.Empty;
+        if (string.IsNullOrWhiteSpace(repoUrl)) return false;
+
+        var trimmed = repoUrl.Trim().TrimEnd('/');
+        if (trimmed.EndsWith(".git", StringComparison.OrdinalIgnoreCase)) trimmed = trimmed[..^4];
+
+        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+        {
+            var segments = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length < 2) return false;
+            owner = segments[0];
+            repo = segments[1];
+        }
+        else
+        {
+            // "owner/repo" 축약형 허용
+            var parts = trimmed.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length != 2) return false;
+            owner = parts[0];
+            repo = parts[1];
+        }
+        return owner.Length > 0 && repo.Length > 0;
+    }
+
+    /// <summary>
+    /// 입력 폴더의 스켈레톤을 sv-cli로 일괄 렌더링한다.
+    /// sv-cli는 폴더 입력 시 스켈레톤마다 자식 프로세스를 "순차" 실행하므로, 여기서 스켈레톤 단위로 직접
+    /// 병렬 실행한다(--root로 출력 폴더 구조는 폴더 입력과 동일하게 유지). 각 실행은 마지막 줄에 JSON 결과를 출력한다.
+    /// </summary>
     public async Task<bool> RenderMonstersAsync(string inputDir, string outputDir, double scale = 0.5, string skin = "all", CancellationToken ct = default)
     {
         var cli = _configService.Config.SvCliExe;
@@ -258,96 +300,125 @@ public class SpineHwaService
             return false;
         }
 
-        Directory.CreateDirectory(outputDir);
+        var root = Path.GetFullPath(inputDir);
+        var outRoot = Path.GetFullPath(outputDir);
+        var cliDir = Path.GetDirectoryName(cli);
 
-        // 입력 폴더 내 스켈레톤 파일(.skel, .json) 개수 파악
-        var skelFiles = Directory.GetFiles(inputDir, "*.*", SearchOption.AllDirectories)
-            .Where(f => f.EndsWith(".skel", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        // 대용량 트리 열거는 스레드 풀에서 수행해 UI를 막지 않는다.
+        var skeletons = await Task.Run(() => Directory
+            .EnumerateFiles(root, "*", SearchOption.AllDirectories)
+            .Where(f => SkeletonExtensions.Contains(Path.GetExtension(f), StringComparer.OrdinalIgnoreCase))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList(), ct).ConfigureAwait(false);
 
-        int totalSkel = Math.Max(1, skelFiles.Count);
-        Log($"몬스터/노트 일괄 렌더링 시작 (대상 스켈레톤 약 {skelFiles.Count}개):");
-        Log($"  - 입력: {inputDir}");
-        Log($"  - 출력: {outputDir}");
-        Log($"  - 옵션: scale={scale}, skin={skin}");
-
-        ProgressChanged?.Invoke(0, totalSkel, 0.0);
-
-        var psi = new ProcessStartInfo(cli)
+        if (skeletons.Count == 0)
         {
-            WorkingDirectory = Path.GetDirectoryName(cli),
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
+            Log($"오류: 입력 폴더에서 스켈레톤(.skel/.json)을 찾지 못했습니다: {root}");
+            return false;
+        }
 
-        psi.ArgumentList.Add("frame");
-        psi.ArgumentList.Add(Path.GetFullPath(inputDir));
-        psi.ArgumentList.Add("--skin");
-        psi.ArgumentList.Add(skin);
-        psi.ArgumentList.Add("--scale");
-        psi.ArgumentList.Add(scale.ToString("0.0#", System.Globalization.CultureInfo.InvariantCulture));
-        psi.ArgumentList.Add("--out");
-        psi.ArgumentList.Add(Path.GetFullPath(outputDir));
+        Directory.CreateDirectory(outRoot);
+        int parallel = Math.Min(_configService.Config.EffectiveParallelJobs, skeletons.Count);
+        var scaleArg = scale.ToString("0.0##", CultureInfo.InvariantCulture);
 
-        int renderedCount = 0;
+        Log($"몬스터/노트 일괄 렌더링 시작 (스켈레톤 {skeletons.Count}개, 동시 {parallel}개)");
+        Log($"  - 입력: {root}");
+        Log($"  - 출력: {outRoot}");
+        Log($"  - 옵션: scale={scaleArg}, skin={skin}");
+
+        int total = skeletons.Count;
+        int completed = 0;
+        int pngCount = 0;
+        var failures = new ConcurrentBag<string>();
+        var sw = Stopwatch.StartNew();
+        ReportProgress(0, total);
 
         try
         {
-            using var proc = Process.Start(psi);
-            if (proc == null) return false;
-
-            using var reg = ct.Register(() =>
-            {
-                try { proc.Kill(entireProcessTree: true); } catch { }
-            });
-
-            proc.OutputDataReceived += (_, e) =>
-            {
-                if (e.Data != null)
+            await Parallel.ForEachAsync(skeletons, new ParallelOptions { MaxDegreeOfParallelism = parallel, CancellationToken = ct },
+                async (skel, token) =>
                 {
-                    Log(e.Data);
-                    // sv-cli는 파일 렌더링 시마다 로그를 출력함
-                    if (e.Data.Contains("saved", StringComparison.OrdinalIgnoreCase) || 
-                        e.Data.Contains("frame", StringComparison.OrdinalIgnoreCase) ||
-                        e.Data.Contains("png", StringComparison.OrdinalIgnoreCase) ||
-                        e.Data.Contains("ok", StringComparison.OrdinalIgnoreCase))
+                    var rel = Path.GetRelativePath(root, skel);
+                    try
                     {
-                        renderedCount++;
-                        double pct = Math.Min(99.0, (double)renderedCount / totalSkel * 100.0);
-                        ProgressChanged?.Invoke(renderedCount, totalSkel, pct);
+                        var result = await ProcessRunner.RunAsync(cli,
+                            new[] { "frame", skel, "--root", root, "--skin", skin, "--scale", scaleArg, "--out", outRoot },
+                            workingDirectory: cliDir,
+                            outputEncoding: Encoding.UTF8,
+                            ct: token).ConfigureAwait(false);
+
+                        var summary = ParseCliSummary(result);
+                        Interlocked.Add(ref pngCount, summary.Rendered);
+                        foreach (var reason in summary.Errors) failures.Add($"{rel}: {reason}");
                     }
-                }
-            };
-            proc.ErrorDataReceived += (_, e) => { if (e.Data != null) Log($"[STDERR] {e.Data}"); };
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        failures.Add($"{rel}: {ex.Message}");
+                    }
 
-            proc.BeginOutputReadLine();
-            proc.BeginErrorReadLine();
-
-            await proc.WaitForExitAsync(ct);
-
-            if (proc.ExitCode == 0)
-            {
-                ProgressChanged?.Invoke(totalSkel, totalSkel, 100.0);
-                Log("렌더링 작업이 완료되었습니다!");
-                return true;
-            }
-            else
-            {
-                Log($"렌더링 중 오류(코드 {proc.ExitCode})가 발생했습니다.");
-                return false;
-            }
+                    int done = Interlocked.Increment(ref completed);
+                    ReportProgress(done, total);
+                }).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             Log("렌더링 작업이 사용자에 의해 취소되었습니다.");
-            return false;
+            throw;
         }
-        catch (Exception ex)
+
+        Log($"렌더링 완료: PNG {pngCount}개 생성, 스켈레톤 {total}개 처리, 실패/스킵 {failures.Count}건 ({sw.Elapsed.TotalSeconds:F1}초)");
+        const int maxShown = 30;
+        foreach (var f in failures.Order(StringComparer.Ordinal).Take(maxShown))
         {
-            Log($"렌더링 프로세스 오류: {ex.Message}");
-            return false;
+            Log($"  ⚠ {f}");
         }
+        if (failures.Count > maxShown) Log($"  ... 외 {failures.Count - maxShown}건");
+
+        return pngCount > 0;
+    }
+
+    internal readonly record struct CliSummary(int Rendered, IReadOnlyList<string> Errors);
+
+    /// <summary>sv-cli 출력의 마지막 JSON 줄({ok, count, results, skipped} 또는 {ok:false, error})을 요약한다.</summary>
+    internal static CliSummary ParseCliSummary(ProcessResult result)
+    {
+        var lines = result.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var line in lines.Reverse())
+        {
+            if (!line.StartsWith('{')) continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var rootEl = doc.RootElement;
+                var errors = new List<string>();
+
+                if (rootEl.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True)
+                {
+                    int count = rootEl.TryGetProperty("count", out var c) && c.TryGetInt32(out var cv) ? cv : 0;
+                    if (rootEl.TryGetProperty("skipped", out var skipped) && skipped.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var s in skipped.EnumerateArray())
+                        {
+                            errors.Add(s.TryGetProperty("reason", out var r) ? r.GetString() ?? "?" : s.ToString());
+                        }
+                    }
+                    return new CliSummary(count, errors);
+                }
+
+                errors.Add(rootEl.TryGetProperty("error", out var err) ? err.GetString() ?? "알 수 없는 오류" : line);
+                return new CliSummary(0, errors);
+            }
+            catch (JsonException)
+            {
+                // JSON이 아닌 줄은 건너뛴다.
+            }
+        }
+
+        var stderr = result.StdErr.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault();
+        return new CliSummary(0, new[] { $"결과 JSON 없음 (코드 {result.ExitCode}){(stderr != null ? $": {stderr}" : "")}" });
     }
 }

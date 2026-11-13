@@ -9,6 +9,9 @@
     <SelfContained>true</SelfContained>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!-- 배포본 시작 속도 개선: JIT 대신 미리 컴파일된 네이티브 코드 사용 -->
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <Version>1.1.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
