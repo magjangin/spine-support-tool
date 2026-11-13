@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using SpineSupportTool.Models;
 
@@ -7,7 +8,12 @@ namespace SpineSupportTool.Services;
 
 public class ConfigService
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    // 한글 경로가 유니코드 이스케이프(\uXXXX)로 저장되지 않게 해 사용자가 설정 파일을 직접 읽고 고치기 쉽게 한다.
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
 
     private readonly string _configPath;
 
