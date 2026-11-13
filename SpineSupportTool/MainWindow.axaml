@@ -59,7 +59,7 @@
             <Grid ColumnDefinitions="*, Auto">
                 <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
                     <TextBlock Text="⚡ Spine Support Tool" FontSize="20" FontWeight="Bold" Foreground="#4C6EF5" VerticalAlignment="Center"/>
-                    <TextBlock Text="v1.0 (Muse Dash &amp; Spine 3.8 Workstation)" FontSize="13" Opacity="0.6" VerticalAlignment="Center" Margin="5,2,0,0"/>
+                    <TextBlock Text="v1.1 (Muse Dash &amp; Spine 3.8 Workstation)" FontSize="13" Opacity="0.6" VerticalAlignment="Center" Margin="5,2,0,0"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
                     <Button Name="BtnOpenViewerTop" Content="🎮 SpineViewer 실행" Click="OnLaunchViewerClick"/>
@@ -93,7 +93,7 @@
                                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
                                     <Button Content="상태 새로고침" Click="OnRefreshStatusClick"/>
                                     <Button Classes="primary" Content="🎮 SpineViewer.exe 실행" Click="OnLaunchViewerClick"/>
-                                    <Button Content="sv-cli 테스트 (도움말 출력)" Click="OnTestCliClick"/>
+                                    <Button Name="BtnTestCli" Content="sv-cli 테스트 (도움말 출력)" Click="OnTestCliClick"/>
                                 </StackPanel>
                             </StackPanel>
                         </Border>
@@ -262,7 +262,7 @@
                             <StackPanel Spacing="10">
                                 <TextBlock Text="도구 및 작업 경로 설정" Classes="header"/>
 
-                                <Grid ColumnDefinitions="160, *, Auto" RowDefinitions="Auto, Auto, Auto, Auto, Auto" Margin="0,4">
+                                <Grid ColumnDefinitions="160, *, Auto" RowDefinitions="Auto, Auto, Auto, Auto, Auto, Auto" Margin="0,4">
                                     <TextBlock Grid.Row="0" Grid.Column="0" Text="뮤즈대쉬 설치 경로:" VerticalAlignment="Center"/>
                                     <TextBox Grid.Row="0" Grid.Column="1" Name="CfgMuseDashPath" Margin="0,3"/>
                                     <Button Grid.Row="0" Grid.Column="2" Content="찾기..." Margin="6,0,0,0" Click="OnBrowseMuseDashPathClick"/>
@@ -282,6 +282,12 @@
                                     <TextBlock Grid.Row="4" Grid.Column="0" Text="BMS 에디터 노트 스킨:" VerticalAlignment="Center"/>
                                     <TextBox Grid.Row="4" Grid.Column="1" Name="CfgBmsNoteSkinDir" Margin="0,3"/>
                                     <Button Grid.Row="4" Grid.Column="2" Content="찾기..." Margin="6,0,0,0" Click="OnBrowseBmsNoteSkinDirClick"/>
+
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="동시 작업 수 (추출/렌더):" VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Row="5" Grid.Column="1" Orientation="Horizontal" Spacing="10" Margin="0,3">
+                                        <NumericUpDown Name="NumParallelJobs" Minimum="0" Maximum="32" Increment="1" FormatString="0" Width="130" ValueChanged="OnParallelJobsChanged"/>
+                                        <TextBlock Name="TxtParallelHint" Text="(0 = 자동)" Opacity="0.6" VerticalAlignment="Center"/>
+                                    </StackPanel>
                                 </Grid>
 
                                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
