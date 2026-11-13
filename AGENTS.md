@@ -48,7 +48,8 @@
 4. **UI 스레드 차단 제거**: 서비스는 `ConfigureAwait(false)` + 대용량 열거/ZIP 해제/평탄화를 스레드 풀에서 실행. (v1.0은 await 뒤 연속 실행이 UI 스레드로 돌아와 평탄화·ZIP 해제·스켈레톤 열거 중 UI가 멈췄음)
 5. **설정 안정성**: 손상된 `appsettings.json`은 `.bak`으로 백업 후 기본값 시작(v1.0은 조용히 덮어씀). 저장은 임시 파일 → 교체(원자적). 저장 실패 사유를 로그에 표시.
 6. **창 종료 시 작업 취소**: `Closing`에서 CTS 취소 → 실행 중 sv-cli/AssetStudio 프로세스 트리 종료.
-7. **기타**: `[GeneratedRegex]` 소스 생성 정규식, `ServiceBase`(로그/진행률 이벤트 공통), GitHub URL 파싱 강화(`.git` 접미사, `owner/repo` 축약형), sv-cli 테스트에 10초 타임아웃, 배포본 `PublishReadyToRun`으로 시작 속도 개선.
+7. **sv-cli 검은 창 숨김 (`Services/HiddenDesktop.cs`)**: sv-cli는 GL 컨텍스트용 eframe 창을 `with_visible(false)`로 만들지만 Windows에서는 실제로 80x103 검은 창이 표시되고 **포커스를 빼앗음**(실측). 스켈레톤마다 sv-cli를 실행하므로 렌더 중 수백 번 깜빡여 다른 작업이 불가능했음. → `CreateDesktopW`로 만든 비표시 데스크톱(`SpineSupportTool_<PID>`)에서 `CreateProcessW`(`STARTUPINFOEX.lpDesktop`, `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`로 파이프 핸들만 상속)로 실행. 실측: 렌더 2회(약 600개 프로세스) 동안 보이는 창 0개·포커스 탈취 0회, 출력 PNG 바이트 동일, 속도 동일. 데스크톱 생성 실패 시 일반 실행으로 자동 대체. `ProcessRunner.RunAsync(hiddenDesktop: true)`로 사용(줄 단위 콜백/타임아웃 미지원).
+8. **기타**: `[GeneratedRegex]` 소스 생성 정규식, `ServiceBase`(로그/진행률 이벤트 공통), GitHub URL 파싱 강화(`.git` 접미사, `owner/repo` 축약형), sv-cli 테스트에 10초 타임아웃, 배포본 `PublishReadyToRun`으로 시작 속도 개선.
 
 ## 4. 핵심 모듈 구성
 - **`Services/ServiceBase.cs`**: `LogReceived` / `ProgressChanged` 이벤트 공통 베이스. 이벤트는 백그라운드 스레드에서 올 수 있음.
@@ -81,6 +82,9 @@
 - **sv-cli 폴더 입력 그대로 사용 (v1.0)**:
   - 폴더 하나만 넘기면 sv-cli 내부 supervise가 스켈레톤을 순차 처리해 CPU가 놀고, 진행 로그도 없어서 진행률이 사실상 동작하지 않았음("saved/frame/png/ok" 문자열 매칭 추정은 최종 JSON 1줄에만 걸림).
   - **결론:** 툴에서 스켈레톤 단위로 쪼개 `--root`와 함께 병렬 호출. 출력 구조/내용은 동일.
+- **sv-cli 창 숨기기: `ProcessStartInfo.WindowStyle = Hidden` / `CreateNoWindow`**:
+  - `CreateNoWindow`는 콘솔 창만 막고, `WindowStyle.Hidden`(STARTUPINFO `wShowWindow=SW_HIDE`)은 eframe/winit 창에 적용되지 않아 둘 다 검은 창과 포커스 탈취가 그대로였음(실측).
+  - **결론:** 숨김 데스크톱 실행으로 해결. 근본 수정은 spine-hwa(sv-cli) 쪽에서 창을 화면 밖/비활성으로 만드는 것이지만, 다른 버전의 sv-cli에서도 동작하도록 툴 쪽에서 막음.
 - **추출 결과 `#ID` 접미사 차이는 툴 문제가 아님**:
   - 같은 번들 안에 이름이 같은 텍스처(예: 장면02 `S02_word`)가 둘 있으면 AssetStudioModCLI가 한쪽에 `_#<PathID>`를 붙이는데, 어느 쪽이 접미사를 받는지는 실행마다 달라질 수 있음(단일 번들·단일 프로세스에서도 발생). 파일 집합과 내용은 동일.
 

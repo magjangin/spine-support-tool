@@ -345,6 +345,7 @@ public class SpineHwaService : ServiceBase
                             new[] { "frame", skel, "--root", root, "--skin", skin, "--scale", scaleArg, "--out", outRoot },
                             workingDirectory: cliDir,
                             outputEncoding: Encoding.UTF8,
+                            hiddenDesktop: true,
                             ct: token).ConfigureAwait(false);
 
                         var summary = ParseCliSummary(result);
